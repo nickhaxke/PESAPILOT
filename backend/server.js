@@ -40,6 +40,35 @@ app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', message: 'PesaPilot API is running' });
 });
 
+// Database connection test
+app.get('/api/db-test', async (req, res) => {
+  try {
+    const pool = require('./config/database');
+    const [rows] = await pool.query('SELECT 1 as test');
+    res.json({ status: 'ok', database: 'connected', result: rows });
+  } catch (error) {
+    res.status(500).json({ 
+      status: 'error', 
+      database: 'failed',
+      message: error.message,
+      code: error.code 
+    });
+  }
+});
+
+// Environment check (hide sensitive data)
+app.get('/api/env-check', (req, res) => {
+  res.json({
+    NODE_ENV: process.env.NODE_ENV || 'not set',
+    PORT: process.env.PORT || 'not set',
+    DB_HOST: process.env.DB_HOST ? 'SET' : 'NOT SET',
+    DB_USER: process.env.DB_USER ? 'SET' : 'NOT SET',
+    DB_PASSWORD: process.env.DB_PASSWORD ? 'SET' : 'NOT SET',
+    DB_NAME: process.env.DB_NAME ? 'SET' : 'NOT SET',
+    JWT_SECRET: process.env.JWT_SECRET ? 'SET' : 'NOT SET'
+  });
+});
+
 // Serve static files in production
 if (process.env.NODE_ENV === 'production') {
   // Serve frontend build files
