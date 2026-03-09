@@ -1,0 +1,18 @@
+{
+  "name": "pesapilot",
+  "version": "1.0.0",
+  "description": "PesaPilot - African Personal Finance & Business Management App",
+  "main": "backend/server.js",
+  "scripts": {
+    "start": "node backend/server.js",
+    "dev": "cd backend && node server.js",
+    "build": "cd frontend && npm run build",
+    "postinstall": "cd backend && npm install"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "keywords": ["finance", "budget", "africa", "tanzania", "swahili", "mobile-money"],
+  "author": "PesaPilot Team",
+  "license": "MIT"
+}
