@@ -1,7 +1,6 @@
 const mysql = require('mysql2/promise');
 require('dotenv').config();
 
-// PlanetScale requires SSL connection
 const poolConfig = {
   host: process.env.DB_HOST,
   user: process.env.DB_USER,
@@ -12,8 +11,8 @@ const poolConfig = {
   queueLimit: 0
 };
 
-// Enable SSL for PlanetScale (production)
-if (process.env.NODE_ENV === 'production' || process.env.DB_SSL === 'true') {
+// Enable SSL only for PlanetScale or when explicitly set
+if (process.env.DB_SSL === 'true') {
   poolConfig.ssl = {
     rejectUnauthorized: true
   };
