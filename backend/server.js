@@ -18,7 +18,7 @@ const aiAssistantRoutes = require('./routes/aiAssistant');
 const app = express();
 
 // Middleware
-app.use(cors());
+
 app.use(express.json());
 
 // Routes
@@ -70,7 +70,10 @@ app.get('/api/env-check', (req, res) => {
 });
 
 app.use(cors({
-  origin: 'https://pesapilot.netlify.app',
+  origin: [
+    'https://pesapilot.netlify.app',
+    /^https:\/\/[a-zA-Z0-9-]+--pesapilot-netlify\.app$/
+  ],
   credentials: true
 }));
 
