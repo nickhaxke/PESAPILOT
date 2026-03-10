@@ -13,14 +13,14 @@ async function calculateFinancialHealth(userId) {
   // Get monthly income
   const [incomeData] = await pool.query(`
     SELECT COALESCE(SUM(amount), 0) as total
-    FROM income WHERE user_id = ? AND MONTH(date) = ? AND YEAR(date) = ?
+    FROM income WHERE user_id = ? AND EXTRACT(MONTH FROM date) = ? AND EXTRACT(YEAR FROM date) = ?
   `, [userId, currentMonth, currentYear]);
   const monthlyIncome = parseFloat(incomeData[0].total);
 
   // Get monthly expenses
   const [expenseData] = await pool.query(`
     SELECT COALESCE(SUM(amount), 0) as total
-    FROM expenses WHERE user_id = ? AND MONTH(date) = ? AND YEAR(date) = ?
+    FROM expenses WHERE user_id = ? AND EXTRACT(MONTH FROM date) = ? AND EXTRACT(YEAR FROM date) = ?
   `, [userId, currentMonth, currentYear]);
   const monthlyExpenses = parseFloat(expenseData[0].total);
 
@@ -38,7 +38,7 @@ async function calculateFinancialHealth(userId) {
       COALESCE(SUM(
         (SELECT COALESCE(SUM(e.amount), 0) FROM expenses e 
          WHERE e.user_id = b.user_id AND e.category = b.category 
-         AND MONTH(e.date) = b.month AND YEAR(e.date) = b.year)
+         AND EXTRACT(MONTH FROM e.date) = b.month AND EXTRACT(YEAR FROM e.date) = b.year)
       ), 0) as total_spent
     FROM budgets b
     WHERE b.user_id = ? AND b.month = ? AND b.year = ?
@@ -58,9 +58,9 @@ async function calculateFinancialHealth(userId) {
 
   // Get income stability (variance in last 3 months)
   const [incomeHistory] = await pool.query(`
-    SELECT MONTH(date) as month, SUM(amount) as total
-    FROM income WHERE user_id = ? AND date >= DATE_SUB(CURDATE(), INTERVAL 3 MONTH)
-    GROUP BY MONTH(date)
+    SELECT EXTRACT(MONTH FROM date) as month, SUM(amount) as total
+    FROM income WHERE user_id = ? AND date >= CURRENT_DATE - INTERVAL '3 months'
+    GROUP BY EXTRACT(MONTH FROM date)
   `, [userId]);
 
   // Calculate individual scores (0-100 each)
@@ -171,15 +171,14 @@ router.get('/score', async (req, res) => {
       INSERT INTO financial_health_history 
       (user_id, score, savings_score, spending_score, debt_score, budget_score, income_stability_score, month, year)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-      ON DUPLICATE KEY UPDATE 
-        score = ?, savings_score = ?, spending_score = ?, debt_score = ?, 
-        budget_score = ?, income_stability_score = ?
+      ON CONFLICT (user_id, month, year) DO UPDATE SET
+        score = EXCLUDED.score, savings_score = EXCLUDED.savings_score, 
+        spending_score = EXCLUDED.spending_score, debt_score = EXCLUDED.debt_score, 
+        budget_score = EXCLUDED.budget_score, income_stability_score = EXCLUDED.income_stability_score
     `, [
       req.userId, health.overall, health.breakdown.savings, health.breakdown.spending,
       health.breakdown.debt, health.breakdown.budget, health.breakdown.income_stability,
-      currentMonth, currentYear,
-      health.overall, health.breakdown.savings, health.breakdown.spending,
-      health.breakdown.debt, health.breakdown.budget, health.breakdown.income_stability
+      currentMonth, currentYear
     ]);
 
     // Update user's score
@@ -272,7 +271,7 @@ router.get('/insights', async (req, res) => {
     const [topCategory] = await pool.query(`
       SELECT category, SUM(amount) as total
       FROM expenses
-      WHERE user_id = ? AND MONTH(date) = MONTH(CURDATE()) AND YEAR(date) = YEAR(CURDATE())
+      WHERE user_id = ? AND EXTRACT(MONTH FROM date) = EXTRACT(MONTH FROM CURRENT_DATE) AND EXTRACT(YEAR FROM date) = EXTRACT(YEAR FROM CURRENT_DATE)
       GROUP BY category
       ORDER BY total DESC
       LIMIT 1
@@ -384,7 +383,7 @@ router.get('/community', async (req, res) => {
     const [communityStats] = await pool.query(`
       SELECT category, avg_percentage, sample_size
       FROM community_stats
-      WHERE country = ? AND month = MONTH(CURDATE()) AND year = YEAR(CURDATE())
+      WHERE country = ? AND month = EXTRACT(MONTH FROM CURRENT_DATE) AND year = EXTRACT(YEAR FROM CURRENT_DATE)
       ORDER BY avg_percentage DESC
     `, [country]);
 
@@ -393,9 +392,9 @@ router.get('/community', async (req, res) => {
       SELECT 
         e.category,
         SUM(e.amount) as total,
-        ROUND(SUM(e.amount) / (SELECT SUM(amount) FROM expenses WHERE user_id = ? AND MONTH(date) = MONTH(CURDATE()) AND YEAR(date) = YEAR(CURDATE())) * 100, 1) as percentage
+        ROUND(SUM(e.amount) / (SELECT SUM(amount) FROM expenses WHERE user_id = ? AND EXTRACT(MONTH FROM date) = EXTRACT(MONTH FROM CURRENT_DATE) AND EXTRACT(YEAR FROM date) = EXTRACT(YEAR FROM CURRENT_DATE)) * 100, 1) as percentage
       FROM expenses e
-      WHERE e.user_id = ? AND MONTH(e.date) = MONTH(CURDATE()) AND YEAR(e.date) = YEAR(CURDATE())
+      WHERE e.user_id = ? AND EXTRACT(MONTH FROM e.date) = EXTRACT(MONTH FROM CURRENT_DATE) AND EXTRACT(YEAR FROM e.date) = EXTRACT(YEAR FROM CURRENT_DATE)
       GROUP BY e.category
     `, [req.userId, req.userId]);
 

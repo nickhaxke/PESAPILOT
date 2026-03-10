@@ -17,7 +17,7 @@ router.get('/', async (req, res) => {
     const params = [req.userId];
 
     if (month && year) {
-      query += ' AND MONTH(date) = ? AND YEAR(date) = ?';
+      query += ' AND EXTRACT(MONTH FROM date) = ? AND EXTRACT(YEAR FROM date) = ?';
       params.push(month, year);
     }
 
@@ -62,15 +62,13 @@ router.post('/', [
     const { amount, source, date, notes } = req.body;
 
     const [result] = await pool.query(
-      'INSERT INTO income (user_id, amount, source, date, notes) VALUES (?, ?, ?, ?, ?)',
+      'INSERT INTO income (user_id, amount, source, date, notes) VALUES (?, ?, ?, ?, ?) RETURNING *',
       [req.userId, amount, source, date, notes || null]
     );
 
-    const [newIncome] = await pool.query('SELECT * FROM income WHERE id = ?', [result.insertId]);
-
     res.status(201).json({ 
       message: 'Income added successfully',
-      income: newIncome[0]
+      income: result[0]
     });
   } catch (error) {
     console.error('Add income error:', error);
@@ -99,12 +97,10 @@ router.put('/:id', [
       return res.status(404).json({ error: 'Income not found' });
     }
 
-    await pool.query(
-      'UPDATE income SET amount = ?, source = ?, date = ?, notes = ? WHERE id = ?',
+    const [updated] = await pool.query(
+      'UPDATE income SET amount = ?, source = ?, date = ?, notes = ? WHERE id = ? RETURNING *',
       [amount, source, date, notes || null, id]
     );
-
-    const [updated] = await pool.query('SELECT * FROM income WHERE id = ?', [id]);
 
     res.json({ 
       message: 'Income updated successfully',

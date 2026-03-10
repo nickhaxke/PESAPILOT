@@ -18,14 +18,14 @@ router.get('/overview', async (req, res) => {
     const [incomeResult] = await pool.query(`
       SELECT COALESCE(SUM(amount), 0) as total
       FROM income
-      WHERE user_id = ? AND MONTH(date) = ? AND YEAR(date) = ?
+      WHERE user_id = ? AND EXTRACT(MONTH FROM date) = ? AND EXTRACT(YEAR FROM date) = ?
     `, [req.userId, currentMonth, currentYear]);
 
     // Get total expenses this month
     const [expenseResult] = await pool.query(`
       SELECT COALESCE(SUM(amount), 0) as total
       FROM expenses
-      WHERE user_id = ? AND MONTH(date) = ? AND YEAR(date) = ?
+      WHERE user_id = ? AND EXTRACT(MONTH FROM date) = ? AND EXTRACT(YEAR FROM date) = ?
     `, [req.userId, currentMonth, currentYear]);
 
     // Get total budget for this month
@@ -73,7 +73,7 @@ router.get('/spending-by-category', async (req, res) => {
         c.icon
       FROM expenses e
       LEFT JOIN categories c ON c.name = e.category
-      WHERE e.user_id = ? AND MONTH(e.date) = ? AND YEAR(e.date) = ?
+      WHERE e.user_id = ? AND EXTRACT(MONTH FROM e.date) = ? AND EXTRACT(YEAR FROM e.date) = ?
       GROUP BY e.category, c.color, c.icon
       ORDER BY total DESC
     `, [req.userId, currentMonth, currentYear]);
@@ -98,24 +98,24 @@ router.get('/monthly-trend', async (req, res) => {
   try {
     const [trend] = await pool.query(`
       SELECT 
-        MONTH(date) as month,
-        YEAR(date) as year,
+        EXTRACT(MONTH FROM date) as month,
+        EXTRACT(YEAR FROM date) as year,
         SUM(amount) as total
       FROM expenses
-      WHERE user_id = ? AND date >= DATE_SUB(CURDATE(), INTERVAL 6 MONTH)
-      GROUP BY YEAR(date), MONTH(date)
+      WHERE user_id = ? AND date >= CURRENT_DATE - INTERVAL '6 months'
+      GROUP BY EXTRACT(YEAR FROM date), EXTRACT(MONTH FROM date)
       ORDER BY year, month
     `, [req.userId]);
 
     // Get income trend too
     const [incomeTrend] = await pool.query(`
       SELECT 
-        MONTH(date) as month,
-        YEAR(date) as year,
+        EXTRACT(MONTH FROM date) as month,
+        EXTRACT(YEAR FROM date) as year,
         SUM(amount) as total
       FROM income
-      WHERE user_id = ? AND date >= DATE_SUB(CURDATE(), INTERVAL 6 MONTH)
-      GROUP BY YEAR(date), MONTH(date)
+      WHERE user_id = ? AND date >= CURRENT_DATE - INTERVAL '6 months'
+      GROUP BY EXTRACT(YEAR FROM date), EXTRACT(MONTH FROM date)
       ORDER BY year, month
     `, [req.userId]);
 
@@ -131,8 +131,8 @@ router.get('/monthly-trend', async (req, res) => {
       const month = date.getMonth() + 1;
       const year = date.getFullYear();
       
-      const expenseData = trend.find(t => t.month === month && t.year === year);
-      const incomeData = incomeTrend.find(t => t.month === month && t.year === year);
+      const expenseData = trend.find(t => parseInt(t.month) === month && parseInt(t.year) === year);
+      const incomeData = incomeTrend.find(t => parseInt(t.month) === month && parseInt(t.year) === year);
       
       trendData.push({
         label: `${months[month - 1]} ${year}`,
@@ -162,7 +162,7 @@ router.get('/insights', async (req, res) => {
     const [expenseResult] = await pool.query(`
       SELECT COALESCE(SUM(amount), 0) as total
       FROM expenses
-      WHERE user_id = ? AND MONTH(date) = ? AND YEAR(date) = ?
+      WHERE user_id = ? AND EXTRACT(MONTH FROM date) = ? AND EXTRACT(YEAR FROM date) = ?
     `, [req.userId, currentMonth, currentYear]);
     const totalExpenses = parseFloat(expenseResult[0].total);
 
@@ -170,7 +170,7 @@ router.get('/insights', async (req, res) => {
     const [categorySpending] = await pool.query(`
       SELECT category, SUM(amount) as total
       FROM expenses
-      WHERE user_id = ? AND MONTH(date) = ? AND YEAR(date) = ?
+      WHERE user_id = ? AND EXTRACT(MONTH FROM date) = ? AND EXTRACT(YEAR FROM date) = ?
       GROUP BY category
       ORDER BY total DESC
     `, [req.userId, currentMonth, currentYear]);
@@ -197,119 +197,92 @@ router.get('/insights', async (req, res) => {
       FROM budgets b
       LEFT JOIN expenses e ON e.user_id = b.user_id 
         AND e.category = b.category 
-        AND MONTH(e.date) = b.month 
-        AND YEAR(e.date) = b.year
+        AND EXTRACT(MONTH FROM e.date) = b.month 
+        AND EXTRACT(YEAR FROM e.date) = b.year
       WHERE b.user_id = ? AND b.month = ? AND b.year = ?
       GROUP BY b.id, b.category, b.amount
-      HAVING spent_amount >= budget_amount * 0.8
+      HAVING COALESCE(SUM(e.amount), 0) > b.amount * 0.8
     `, [req.userId, currentMonth, currentYear]);
 
     // Add budget warnings as insights
-    for (const warning of budgetWarnings) {
-      const percentage = Math.round((parseFloat(warning.spent_amount) / parseFloat(warning.budget_amount)) * 100);
+    budgetWarnings.forEach(bw => {
+      const percentage = Math.round((parseFloat(bw.spent_amount) / parseFloat(bw.budget_amount)) * 100);
       const isOver = percentage >= 100;
       insights.push({
         type: isOver ? 'warning' : 'caution',
         message: isOver 
-          ? `You have exceeded your ${warning.category} budget by ${percentage - 100}%.`
-          : `You have used ${percentage}% of your ${warning.category} budget.`,
-        category: warning.category,
+          ? `You've exceeded your ${bw.category} budget by ${percentage - 100}%!`
+          : `${bw.category} budget is at ${percentage}%. Be careful!`,
+        category: bw.category,
         percentage,
         icon: isOver ? 'alert-triangle' : 'alert-circle'
       });
-    }
+    });
 
-    // Compare to last month
-    const lastMonth = currentMonth === 1 ? 12 : currentMonth - 1;
-    const lastMonthYear = currentMonth === 1 ? currentYear - 1 : currentYear;
-    
-    const [lastMonthExpenses] = await pool.query(`
-      SELECT COALESCE(SUM(amount), 0) as total
-      FROM expenses
-      WHERE user_id = ? AND MONTH(date) = ? AND YEAR(date) = ?
-    `, [req.userId, lastMonth, lastMonthYear]);
-    
-    const lastMonthTotal = parseFloat(lastMonthExpenses[0].total);
-    if (lastMonthTotal > 0 && totalExpenses > 0) {
-      const change = Math.round(((totalExpenses - lastMonthTotal) / lastMonthTotal) * 100);
-      if (change !== 0) {
-        insights.push({
-          type: change > 0 ? 'info' : 'success',
-          message: change > 0 
-            ? `Your spending is ${change}% higher than last month.`
-            : `Your spending is ${Math.abs(change)}% lower than last month.`,
-          percentage: Math.abs(change),
-          icon: change > 0 ? 'arrow-up' : 'arrow-down'
-        });
+    // Get recent transactions
+    const [recentTransactions] = await pool.query(`
+      SELECT 'expense' as type, amount, category, date, description
+      FROM expenses WHERE user_id = ?
+      UNION ALL
+      SELECT 'income' as type, amount, source as category, date, notes as description
+      FROM income WHERE user_id = ?
+      ORDER BY date DESC LIMIT 5
+    `, [req.userId, req.userId]);
+
+    res.json({ 
+      insights,
+      recentTransactions,
+      summary: {
+        totalExpenses,
+        categoriesCount: categorySpending.length,
+        budgetWarningsCount: budgetWarnings.length
       }
-    }
-
-    // Savings insight
-    const [incomeResult] = await pool.query(`
-      SELECT COALESCE(SUM(amount), 0) as total
-      FROM income
-      WHERE user_id = ? AND MONTH(date) = ? AND YEAR(date) = ?
-    `, [req.userId, currentMonth, currentYear]);
-    
-    const totalIncome = parseFloat(incomeResult[0].total);
-    if (totalIncome > 0) {
-      const savingsRate = Math.round(((totalIncome - totalExpenses) / totalIncome) * 100);
-      if (savingsRate > 0) {
-        insights.push({
-          type: 'success',
-          message: `You're saving ${savingsRate}% of your income this month.`,
-          percentage: savingsRate,
-          icon: 'piggy-bank'
-        });
-      } else if (savingsRate < 0) {
-        insights.push({
-          type: 'warning',
-          message: `You're spending ${Math.abs(savingsRate)}% more than your income this month.`,
-          percentage: Math.abs(savingsRate),
-          icon: 'alert-triangle'
-        });
-      }
-    }
-
-    res.json({ insights });
+    });
   } catch (error) {
     console.error('Get insights error:', error);
     res.status(500).json({ error: 'Failed to get insights' });
   }
 });
 
-// Get recent transactions
-router.get('/recent', async (req, res) => {
+// Get quick stats for dashboard
+router.get('/quick-stats', async (req, res) => {
   try {
-    const limit = req.query.limit || 5;
+    const currentMonth = new Date().getMonth() + 1;
+    const currentYear = new Date().getFullYear();
 
-    // Get recent income
-    const [recentIncome] = await pool.query(`
-      SELECT id, amount, source as category, date, notes as description, 'income' as type
-      FROM income
-      WHERE user_id = ?
-      ORDER BY date DESC, created_at DESC
-      LIMIT ?
-    `, [req.userId, parseInt(limit)]);
+    // Get savings goals stats
+    const [savingsStats] = await pool.query(`
+      SELECT 
+        COUNT(*) as total_goals,
+        COALESCE(SUM(current_amount), 0) as total_saved,
+        COALESCE(SUM(target_amount), 0) as total_target
+      FROM savings_goals
+      WHERE user_id = ? AND status = 'active'
+    `, [req.userId]);
 
-    // Get recent expenses
-    const [recentExpenses] = await pool.query(`
-      SELECT id, amount, category, date, description, 'expense' as type
-      FROM expenses
-      WHERE user_id = ?
-      ORDER BY date DESC, created_at DESC
-      LIMIT ?
-    `, [req.userId, parseInt(limit)]);
+    // Get debts stats
+    const [debtsStats] = await pool.query(`
+      SELECT 
+        COUNT(*) as total_debts,
+        COALESCE(SUM(current_balance), 0) as total_owed
+      FROM debts
+      WHERE user_id = ? AND status = 'active'
+    `, [req.userId]);
 
-    // Combine and sort
-    const transactions = [...recentIncome, ...recentExpenses]
-      .sort((a, b) => new Date(b.date) - new Date(a.date))
-      .slice(0, parseInt(limit));
-
-    res.json({ transactions });
+    res.json({
+      savings: {
+        totalGoals: parseInt(savingsStats[0].total_goals) || 0,
+        totalSaved: parseFloat(savingsStats[0].total_saved) || 0,
+        totalTarget: parseFloat(savingsStats[0].total_target) || 0
+      },
+      debts: {
+        totalDebts: parseInt(debtsStats[0].total_debts) || 0,
+        totalOwed: parseFloat(debtsStats[0].total_owed) || 0
+      }
+    });
   } catch (error) {
-    console.error('Get recent transactions error:', error);
-    res.status(500).json({ error: 'Failed to get recent transactions' });
+    console.error('Get quick stats error:', error);
+    res.status(500).json({ error: 'Failed to get quick stats' });
   }
 });
 

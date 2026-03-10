@@ -14,7 +14,7 @@ router.get('/', async (req, res) => {
     let query = `
       SELECT sg.*, 
         ROUND((sg.current_amount / sg.target_amount) * 100, 1) as progress_percentage,
-        DATEDIFF(sg.deadline, CURDATE()) as days_remaining
+        (sg.deadline - CURRENT_DATE) as days_remaining
       FROM savings_goals sg
       WHERE sg.user_id = ?
     `;
@@ -50,7 +50,7 @@ router.get('/', async (req, res) => {
   }
 });
 
-// ⚠️ IMPORTANT: Summary route MUST be before /:id route
+// Summary route MUST be before /:id route
 router.get('/summary/stats', async (req, res) => {
   try {
     const [summary] = await pool.query(`
@@ -69,10 +69,9 @@ router.get('/summary/stats', async (req, res) => {
     const [monthlyContrib] = await pool.query(`
       SELECT COALESCE(SUM(amount), 0) as monthly_savings
       FROM savings_contributions
-      WHERE user_id = ? AND MONTH(date) = MONTH(CURDATE()) AND YEAR(date) = YEAR(CURDATE())
+      WHERE user_id = ? AND EXTRACT(MONTH FROM date) = EXTRACT(MONTH FROM CURRENT_DATE) AND EXTRACT(YEAR FROM date) = EXTRACT(YEAR FROM CURRENT_DATE)
     `, [req.userId]);
 
-    // Return camelCase format expected by frontend
     res.json({
       totalGoals: parseInt(summary[0].active_goals) || 0,
       totalSaved: parseFloat(summary[0].total_saved) || 0,
@@ -87,7 +86,7 @@ router.get('/summary/stats', async (req, res) => {
   }
 });
 
-// Get single goal with contributions (MUST be after /summary/stats)
+// Get single goal with contributions
 router.get('/:id', async (req, res) => {
   try {
     const [goals] = await pool.query(
@@ -129,7 +128,7 @@ router.post('/', [
 
     const [result] = await pool.query(
       `INSERT INTO savings_goals (user_id, name, target_amount, current_amount, deadline, icon, color, priority, category)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING *`,
       [
         req.userId, 
         name, 
@@ -143,9 +142,7 @@ router.post('/', [
       ]
     );
 
-    const [newGoal] = await pool.query('SELECT * FROM savings_goals WHERE id = ?', [result.insertId]);
-
-    res.status(201).json({ message: 'Goal created successfully', goal: newGoal[0] });
+    res.status(201).json({ message: 'Goal created successfully', goal: result[0] });
   } catch (error) {
     console.error('Create goal error:', error);
     res.status(500).json({ error: 'Failed to create goal' });
@@ -187,12 +184,10 @@ router.post('/:id/contribute', [
     const newAmount = parseFloat(goal.current_amount) + parseFloat(amount);
     const status = newAmount >= parseFloat(goal.target_amount) ? 'completed' : 'active';
 
-    await pool.query(
-      'UPDATE savings_goals SET current_amount = ?, status = ? WHERE id = ?',
+    const [updatedGoal] = await pool.query(
+      'UPDATE savings_goals SET current_amount = ?, status = ? WHERE id = ? RETURNING *',
       [newAmount, status, id]
     );
-
-    const [updatedGoal] = await pool.query('SELECT * FROM savings_goals WHERE id = ?', [id]);
 
     res.json({ 
       message: status === 'completed' ? 'Congratulations! Goal completed!' : 'Contribution added',
@@ -204,11 +199,45 @@ router.post('/:id/contribute', [
   }
 });
 
-// Update goal
+// Update savings goal
 router.put('/:id', async (req, res) => {
   try {
     const { id } = req.params;
-    const { name, target_amount, current_amount, deadline, icon, color, priority, status, category } = req.body;
+    const { name, target_amount, deadline, icon, color, priority, category } = req.body;
+
+    const [existing] = await pool.query(
+      'SELECT * FROM savings_goals WHERE id = ? AND user_id = ?',
+      [id, req.userId]
+    );
+
+    if (existing.length === 0) {
+      return res.status(404).json({ error: 'Goal not found' });
+    }
+
+    const [updated] = await pool.query(
+      `UPDATE savings_goals SET 
+        name = COALESCE(?, name),
+        target_amount = COALESCE(?, target_amount),
+        deadline = COALESCE(?, deadline),
+        icon = COALESCE(?, icon),
+        color = COALESCE(?, color),
+        priority = COALESCE(?, priority),
+        category = COALESCE(?, category)
+       WHERE id = ? RETURNING *`,
+      [name, target_amount, deadline, icon, color, priority, category, id]
+    );
+
+    res.json({ message: 'Goal updated successfully', goal: updated[0] });
+  } catch (error) {
+    console.error('Update goal error:', error);
+    res.status(500).json({ error: 'Failed to update goal' });
+  }
+});
+
+// Delete savings goal
+router.delete('/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
 
     const [existing] = await pool.query(
       'SELECT id FROM savings_goals WHERE id = ? AND user_id = ?',
@@ -219,46 +248,9 @@ router.put('/:id', async (req, res) => {
       return res.status(404).json({ error: 'Goal not found' });
     }
 
-    await pool.query(
-      `UPDATE savings_goals SET 
-        name = COALESCE(?, name),
-        target_amount = COALESCE(?, target_amount),
-        current_amount = COALESCE(?, current_amount),
-        deadline = COALESCE(?, deadline),
-        icon = COALESCE(?, icon),
-        color = COALESCE(?, color),
-        priority = COALESCE(?, priority),
-        status = COALESCE(?, status),
-        category = COALESCE(?, category)
-       WHERE id = ?`,
-      [name, target_amount, current_amount, deadline, icon, color, priority, status, category, id]
-    );
+    await pool.query('DELETE FROM savings_goals WHERE id = ?', [id]);
 
-    const [updated] = await pool.query('SELECT * FROM savings_goals WHERE id = ?', [id]);
-    res.json({ message: 'Goal updated', goal: updated[0] });
-  } catch (error) {
-    console.error('Update goal error:', error);
-    res.status(500).json({ error: 'Failed to update goal' });
-  }
-});
-
-// Delete goal
-router.delete('/:id', async (req, res) => {
-  try {
-    const [existing] = await pool.query(
-      'SELECT id FROM savings_goals WHERE id = ? AND user_id = ?',
-      [req.params.id, req.userId]
-    );
-
-    if (existing.length === 0) {
-      return res.status(404).json({ error: 'Goal not found' });
-    }
-
-    // Delete contributions first
-    await pool.query('DELETE FROM savings_contributions WHERE goal_id = ?', [req.params.id]);
-    await pool.query('DELETE FROM savings_goals WHERE id = ?', [req.params.id]);
-    
-    res.json({ message: 'Goal deleted' });
+    res.json({ message: 'Goal deleted successfully' });
   } catch (error) {
     console.error('Delete goal error:', error);
     res.status(500).json({ error: 'Failed to delete goal' });

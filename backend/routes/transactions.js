@@ -51,7 +51,7 @@ router.get('/', async (req, res) => {
       }
 
       if (search) {
-        incomeQuery += ' AND (source LIKE ? OR notes LIKE ?)';
+        incomeQuery += ' AND (source ILIKE ? OR notes ILIKE ?)';
         incomeParams.push(`%${search}%`, `%${search}%`);
       }
 
@@ -84,7 +84,7 @@ router.get('/', async (req, res) => {
       }
 
       if (search) {
-        expenseQuery += ' AND (category LIKE ? OR description LIKE ?)';
+        expenseQuery += ' AND (category ILIKE ? OR description ILIKE ?)';
         expenseParams.push(`%${search}%`, `%${search}%`);
       }
 
@@ -164,9 +164,9 @@ router.get('/summary', async (req, res) => {
     res.json({
       summary: {
         totalIncome: parseFloat(incomeResult[0].total),
-        incomeCount: incomeResult[0].count,
+        incomeCount: parseInt(incomeResult[0].count),
         totalExpenses: parseFloat(expenseResult[0].total),
-        expenseCount: expenseResult[0].count,
+        expenseCount: parseInt(expenseResult[0].count),
         netBalance: parseFloat(incomeResult[0].total) - parseFloat(expenseResult[0].total)
       }
     });
@@ -202,6 +202,8 @@ router.get('/export', async (req, res) => {
         incomeParams.push(endDate);
       }
 
+      incomeQuery += ' ORDER BY date DESC';
+
       const [income] = await pool.query(incomeQuery, incomeParams);
       transactions.push(...income);
     }
@@ -225,28 +227,26 @@ router.get('/export', async (req, res) => {
         expenseParams.push(endDate);
       }
 
+      expenseQuery += ' ORDER BY date DESC';
+
       const [expenses] = await pool.query(expenseQuery, expenseParams);
       transactions.push(...expenses);
     }
 
     // Sort by date
-    transactions.sort((a, b) => new Date(b.Date) - new Date(a.Date));
+    transactions.sort((a, b) => new Date(b.date) - new Date(a.date));
 
-    // Convert to CSV
-    if (transactions.length === 0) {
-      return res.json({ csv: 'Type,Amount,Category,Date,Description\n' });
-    }
+    // Generate CSV
+    const headers = ['Type', 'Amount', 'Category', 'Date', 'Description'];
+    let csv = headers.join(',') + '\n';
+    
+    transactions.forEach(t => {
+      csv += `${t.type},${t.amount},"${t.category}",${t.date},"${t.description || ''}"\n`;
+    });
 
-    const headers = Object.keys(transactions[0]).join(',');
-    const rows = transactions.map(t => 
-      Object.values(t).map(v => 
-        typeof v === 'string' && v.includes(',') ? `"${v}"` : v
-      ).join(',')
-    );
-
-    const csv = [headers, ...rows].join('\n');
-
-    res.json({ csv });
+    res.setHeader('Content-Type', 'text/csv');
+    res.setHeader('Content-Disposition', 'attachment; filename=pesapilot-transactions.csv');
+    res.send(csv);
   } catch (error) {
     console.error('Export transactions error:', error);
     res.status(500).json({ error: 'Failed to export transactions' });

@@ -30,15 +30,17 @@ router.post('/register', [
     // Hash password
     const hashedPassword = await bcrypt.hash(password, 12);
 
-    // Create user
+    // Create user - PostgreSQL uses RETURNING to get inserted ID
     const [result] = await pool.query(
-      'INSERT INTO users (name, email, password) VALUES (?, ?, ?)',
+      'INSERT INTO users (name, email, password) VALUES (?, ?, ?) RETURNING id',
       [name, email, hashedPassword]
     );
 
+    const userId = result[0].id;
+
     // Generate token
     const token = jwt.sign(
-      { userId: result.insertId },
+      { userId },
       process.env.JWT_SECRET,
       { expiresIn: process.env.JWT_EXPIRES_IN }
     );
@@ -46,7 +48,7 @@ router.post('/register', [
     res.status(201).json({
       message: 'Registration successful',
       token,
-      user: { id: result.insertId, name, email }
+      user: { id: userId, name, email }
     });
   } catch (error) {
     console.error('Registration error:', error);

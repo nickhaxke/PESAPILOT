@@ -17,7 +17,7 @@ router.get('/', async (req, res) => {
     const params = [req.userId];
 
     if (month && year) {
-      query += ' AND MONTH(date) = ? AND YEAR(date) = ?';
+      query += ' AND EXTRACT(MONTH FROM date) = ? AND EXTRACT(YEAR FROM date) = ?';
       params.push(month, year);
     }
 
@@ -67,15 +67,13 @@ router.post('/', [
     const { amount, category, date, description } = req.body;
 
     const [result] = await pool.query(
-      'INSERT INTO expenses (user_id, amount, category, date, description) VALUES (?, ?, ?, ?, ?)',
+      'INSERT INTO expenses (user_id, amount, category, date, description) VALUES (?, ?, ?, ?, ?) RETURNING *',
       [req.userId, amount, category, date, description || null]
     );
 
-    const [newExpense] = await pool.query('SELECT * FROM expenses WHERE id = ?', [result.insertId]);
-
     res.status(201).json({ 
       message: 'Expense added successfully',
-      expense: newExpense[0]
+      expense: result[0]
     });
   } catch (error) {
     console.error('Add expense error:', error);
@@ -104,12 +102,10 @@ router.put('/:id', [
       return res.status(404).json({ error: 'Expense not found' });
     }
 
-    await pool.query(
-      'UPDATE expenses SET amount = ?, category = ?, date = ?, description = ? WHERE id = ?',
+    const [updated] = await pool.query(
+      'UPDATE expenses SET amount = ?, category = ?, date = ?, description = ? WHERE id = ? RETURNING *',
       [amount, category, date, description || null, id]
     );
-
-    const [updated] = await pool.query('SELECT * FROM expenses WHERE id = ?', [id]);
 
     res.json({ 
       message: 'Expense updated successfully',

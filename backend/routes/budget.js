@@ -15,7 +15,7 @@ router.get('/', async (req, res) => {
     const currentMonth = month || new Date().getMonth() + 1;
     const currentYear = year || new Date().getFullYear();
 
-    // Get budgets with spent amounts
+    // Get budgets with spent amounts - PostgreSQL syntax
     const [budgets] = await pool.query(`
       SELECT 
         b.id,
@@ -27,8 +27,8 @@ router.get('/', async (req, res) => {
       FROM budgets b
       LEFT JOIN expenses e ON e.user_id = b.user_id 
         AND e.category = b.category 
-        AND MONTH(e.date) = b.month 
-        AND YEAR(e.date) = b.year
+        AND EXTRACT(MONTH FROM e.date) = b.month 
+        AND EXTRACT(YEAR FROM e.date) = b.year
       WHERE b.user_id = ? AND b.month = ? AND b.year = ?
       GROUP BY b.id, b.category, b.amount, b.month, b.year
       ORDER BY b.category
@@ -48,7 +48,7 @@ router.get('/', async (req, res) => {
   }
 });
 
-// Set/Update budget
+// Set/Update budget - PostgreSQL UPSERT syntax
 router.post('/', [
   body('category').trim().notEmpty().withMessage('Category is required'),
   body('amount').isFloat({ min: 0.01 }).withMessage('Amount must be a positive number'),
@@ -63,12 +63,12 @@ router.post('/', [
 
     const { category, amount, month, year } = req.body;
 
-    // Upsert - insert or update if exists
+    // PostgreSQL UPSERT - insert or update if exists
     await pool.query(`
       INSERT INTO budgets (user_id, category, amount, month, year)
       VALUES (?, ?, ?, ?, ?)
-      ON DUPLICATE KEY UPDATE amount = ?
-    `, [req.userId, category, amount, month, year, amount]);
+      ON CONFLICT (user_id, category, month, year) DO UPDATE SET amount = EXCLUDED.amount
+    `, [req.userId, category, amount, month, year]);
 
     // Get the updated budget
     const [budgets] = await pool.query(`
@@ -82,8 +82,8 @@ router.post('/', [
       FROM budgets b
       LEFT JOIN expenses e ON e.user_id = b.user_id 
         AND e.category = b.category 
-        AND MONTH(e.date) = b.month 
-        AND YEAR(e.date) = b.year
+        AND EXTRACT(MONTH FROM e.date) = b.month 
+        AND EXTRACT(YEAR FROM e.date) = b.year
       WHERE b.user_id = ? AND b.category = ? AND b.month = ? AND b.year = ?
       GROUP BY b.id, b.category, b.amount, b.month, b.year
     `, [req.userId, category, month, year]);
@@ -140,13 +140,13 @@ router.post('/copy', async (req, res) => {
       return res.status(404).json({ error: 'No budgets found for the source month' });
     }
 
-    // Copy to destination month
+    // Copy to destination month - PostgreSQL UPSERT
     for (const budget of sourceBudgets) {
       await pool.query(`
         INSERT INTO budgets (user_id, category, amount, month, year)
         VALUES (?, ?, ?, ?, ?)
-        ON DUPLICATE KEY UPDATE amount = ?
-      `, [req.userId, budget.category, budget.amount, toMonth, toYear, budget.amount]);
+        ON CONFLICT (user_id, category, month, year) DO UPDATE SET amount = EXCLUDED.amount
+      `, [req.userId, budget.category, budget.amount, toMonth, toYear]);
     }
 
     res.json({ message: `${sourceBudgets.length} budgets copied successfully` });

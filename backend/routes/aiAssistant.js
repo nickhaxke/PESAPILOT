@@ -31,21 +31,21 @@ class FinancialAI {
     const [income] = await pool.query(`
       SELECT COALESCE(SUM(amount), 0) as total,
         COUNT(*) as count,
-        GROUP_CONCAT(DISTINCT source) as sources
-      FROM income WHERE user_id = ? AND MONTH(date) = ? AND YEAR(date) = ?
+        STRING_AGG(DISTINCT source, ',') as sources
+      FROM income WHERE user_id = ? AND EXTRACT(MONTH FROM date) = ? AND EXTRACT(YEAR FROM date) = ?
     `, [this.userId, currentMonth, currentYear]);
 
     // Get expenses by category
     const [expenses] = await pool.query(`
       SELECT category, SUM(amount) as total, COUNT(*) as count
-      FROM expenses WHERE user_id = ? AND MONTH(date) = ? AND YEAR(date) = ?
+      FROM expenses WHERE user_id = ? AND EXTRACT(MONTH FROM date) = ? AND EXTRACT(YEAR FROM date) = ?
       GROUP BY category ORDER BY total DESC
     `, [this.userId, currentMonth, currentYear]);
 
     // Get total expenses
     const [totalExpenses] = await pool.query(`
       SELECT COALESCE(SUM(amount), 0) as total
-      FROM expenses WHERE user_id = ? AND MONTH(date) = ? AND YEAR(date) = ?
+      FROM expenses WHERE user_id = ? AND EXTRACT(MONTH FROM date) = ? AND EXTRACT(YEAR FROM date) = ?
     `, [this.userId, currentMonth, currentYear]);
 
     // Get budgets
@@ -53,7 +53,7 @@ class FinancialAI {
       SELECT b.*, 
         COALESCE((SELECT SUM(e.amount) FROM expenses e 
           WHERE e.user_id = b.user_id AND e.category = b.category 
-          AND MONTH(e.date) = b.month AND YEAR(e.date) = b.year), 0) as spent
+          AND EXTRACT(MONTH FROM e.date) = b.month AND EXTRACT(YEAR FROM e.date) = b.year), 0) as spent
       FROM budgets b WHERE b.user_id = ? AND b.month = ? AND b.year = ?
     `, [this.userId, currentMonth, currentYear]);
 
@@ -69,9 +69,9 @@ class FinancialAI {
 
     // Get last 3 months spending trend
     const [spendingTrend] = await pool.query(`
-      SELECT MONTH(date) as month, YEAR(date) as year, SUM(amount) as total
-      FROM expenses WHERE user_id = ? AND date >= DATE_SUB(CURDATE(), INTERVAL 3 MONTH)
-      GROUP BY MONTH(date), YEAR(date) ORDER BY year, month
+      SELECT EXTRACT(MONTH FROM date) as month, EXTRACT(YEAR FROM date) as year, SUM(amount) as total
+      FROM expenses WHERE user_id = ? AND date >= CURRENT_DATE - INTERVAL '3 months'
+      GROUP BY EXTRACT(MONTH FROM date), EXTRACT(YEAR FROM date) ORDER BY year, month
     `, [this.userId]);
 
     // Get recent transactions

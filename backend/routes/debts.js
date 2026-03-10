@@ -14,7 +14,7 @@ router.get('/', async (req, res) => {
     let query = `
       SELECT d.*,
         ROUND(((d.original_amount - d.current_balance) / d.original_amount) * 100, 1) as paid_percentage,
-        DATEDIFF(d.end_date, CURDATE()) as days_until_due
+        (d.end_date - CURRENT_DATE) as days_until_due
       FROM debts d
       WHERE d.user_id = ?
     `;
@@ -43,7 +43,7 @@ router.get('/', async (req, res) => {
   }
 });
 
-// ⚠️ IMPORTANT: Summary route MUST be before /:id route
+// Summary route MUST be before /:id route
 router.get('/summary/stats', async (req, res) => {
   try {
     const [summary] = await pool.query(`
@@ -63,25 +63,24 @@ router.get('/summary/stats', async (req, res) => {
     const [monthlyPayments] = await pool.query(`
       SELECT COALESCE(SUM(amount), 0) as monthly_paid
       FROM debt_payments
-      WHERE user_id = ? AND MONTH(date) = MONTH(CURDATE()) AND YEAR(date) = YEAR(CURDATE())
+      WHERE user_id = ? AND EXTRACT(MONTH FROM date) = EXTRACT(MONTH FROM CURRENT_DATE) AND EXTRACT(YEAR FROM date) = EXTRACT(YEAR FROM CURRENT_DATE)
     `, [req.userId]);
 
     // Get overdue debts count
     const [overdue] = await pool.query(`
       SELECT COUNT(*) as overdue_count
       FROM debts
-      WHERE user_id = ? AND status = 'active' AND end_date < CURDATE()
+      WHERE user_id = ? AND status = 'active' AND end_date < CURRENT_DATE
     `, [req.userId]);
 
     // Get upcoming payments (debts due in next 7 days)
     const [upcoming] = await pool.query(`
       SELECT id, name, minimum_payment, due_day
       FROM debts
-      WHERE user_id = ? AND status = 'active' AND due_day BETWEEN DAY(CURDATE()) AND DAY(CURDATE()) + 7
+      WHERE user_id = ? AND status = 'active' AND due_day BETWEEN EXTRACT(DAY FROM CURRENT_DATE) AND EXTRACT(DAY FROM CURRENT_DATE) + 7
       ORDER BY due_day ASC
     `, [req.userId]);
 
-    // Return camelCase format expected by frontend
     res.json({
       totalDebts: parseInt(summary[0].active_debts) || 0,
       totalOwed: parseFloat(summary[0].total_owed) || 0,
@@ -97,7 +96,7 @@ router.get('/summary/stats', async (req, res) => {
   }
 });
 
-// Get debt with payments (MUST be after /summary/stats)
+// Get debt with payments
 router.get('/:id', async (req, res) => {
   try {
     const [debts] = await pool.query(
@@ -140,7 +139,7 @@ router.post('/', [
       interest_rate, minimum_payment, due_day, start_date, end_date, due_date, category 
     } = req.body;
 
-    // Map frontend category to valid database type ENUM
+    // Map frontend category to valid database type
     const categoryToType = {
       'personal_loan': 'personal',
       'credit_card': 'credit_card',
@@ -156,7 +155,7 @@ router.post('/', [
     const [result] = await pool.query(
       `INSERT INTO debts (user_id, name, type, lender, original_amount, current_balance, 
         interest_rate, minimum_payment, due_day, start_date, end_date, category)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING *`,
       [
         req.userId, 
         name, 
@@ -173,11 +172,9 @@ router.post('/', [
       ]
     );
 
-    const [newDebt] = await pool.query('SELECT * FROM debts WHERE id = ?', [result.insertId]);
-
-    res.status(201).json({ message: 'Debt added successfully', debt: newDebt[0] });
+    res.status(201).json({ message: 'Debt added successfully', debt: result[0] });
   } catch (error) {
-    console.error('Create debt error:', error.message, error.sql || '');
+    console.error('Create debt error:', error.message);
     res.status(500).json({ error: 'Failed to create debt: ' + error.message });
   }
 });
@@ -207,7 +204,7 @@ router.post('/:id/payment', [
 
     const debt = debts[0];
 
-    // Add payment
+    // Add payment record
     await pool.query(
       'INSERT INTO debt_payments (debt_id, user_id, amount, date, notes) VALUES (?, ?, ?, ?, ?)',
       [id, req.userId, amount, date || new Date().toISOString().split('T')[0], notes || null]
@@ -217,18 +214,16 @@ router.post('/:id/payment', [
     const newBalance = Math.max(0, parseFloat(debt.current_balance) - parseFloat(amount));
     const status = newBalance <= 0 ? 'paid_off' : 'active';
 
-    await pool.query(
-      'UPDATE debts SET current_balance = ?, status = ? WHERE id = ?',
+    const [updatedDebt] = await pool.query(
+      'UPDATE debts SET current_balance = ?, status = ? WHERE id = ? RETURNING *',
       [newBalance, status, id]
     );
 
-    // Also record as expense - so it shows in spending reports
+    // Also record as expense
     await pool.query(
-      'INSERT INTO expenses (user_id, amount, category, date, description, source) VALUES (?, ?, ?, ?, ?, ?)',
-      [req.userId, amount, 'Debt Payment', date || new Date().toISOString().split('T')[0], `Malipo ya deni: ${debt.name}`, 'debt_payment']
+      'INSERT INTO expenses (user_id, amount, category, date, description) VALUES (?, ?, ?, ?, ?)',
+      [req.userId, amount, 'debt_payment', date || new Date().toISOString().split('T')[0], `Payment for ${debt.name}`]
     );
-
-    const [updatedDebt] = await pool.query('SELECT * FROM debts WHERE id = ?', [id]);
 
     res.json({ 
       message: status === 'paid_off' ? 'Congratulations! Debt paid off!' : 'Payment recorded',
@@ -244,7 +239,40 @@ router.post('/:id/payment', [
 router.put('/:id', async (req, res) => {
   try {
     const { id } = req.params;
-    const updates = req.body;
+    const { name, lender, interest_rate, minimum_payment, due_day, end_date } = req.body;
+
+    const [existing] = await pool.query(
+      'SELECT * FROM debts WHERE id = ? AND user_id = ?',
+      [id, req.userId]
+    );
+
+    if (existing.length === 0) {
+      return res.status(404).json({ error: 'Debt not found' });
+    }
+
+    const [updated] = await pool.query(
+      `UPDATE debts SET 
+        name = COALESCE(?, name),
+        lender = COALESCE(?, lender),
+        interest_rate = COALESCE(?, interest_rate),
+        minimum_payment = COALESCE(?, minimum_payment),
+        due_day = COALESCE(?, due_day),
+        end_date = COALESCE(?, end_date)
+       WHERE id = ? RETURNING *`,
+      [name, lender, interest_rate, minimum_payment, due_day, end_date, id]
+    );
+
+    res.json({ message: 'Debt updated successfully', debt: updated[0] });
+  } catch (error) {
+    console.error('Update debt error:', error);
+    res.status(500).json({ error: 'Failed to update debt' });
+  }
+});
+
+// Delete debt
+router.delete('/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
 
     const [existing] = await pool.query(
       'SELECT id FROM debts WHERE id = ? AND user_id = ?',
@@ -255,47 +283,9 @@ router.put('/:id', async (req, res) => {
       return res.status(404).json({ error: 'Debt not found' });
     }
 
-    const allowedFields = ['name', 'type', 'lender', 'interest_rate', 'minimum_payment', 'due_day', 'end_date', 'status'];
-    const updateFields = [];
-    const values = [];
+    await pool.query('DELETE FROM debts WHERE id = ?', [id]);
 
-    for (const field of allowedFields) {
-      if (updates[field] !== undefined) {
-        updateFields.push(`${field} = ?`);
-        values.push(updates[field]);
-      }
-    }
-
-    if (updateFields.length > 0) {
-      values.push(id);
-      await pool.query(`UPDATE debts SET ${updateFields.join(', ')} WHERE id = ?`, values);
-    }
-
-    const [updated] = await pool.query('SELECT * FROM debts WHERE id = ?', [id]);
-    res.json({ message: 'Debt updated', debt: updated[0] });
-  } catch (error) {
-    console.error('Update debt error:', error);
-    res.status(500).json({ error: 'Failed to update debt' });
-  }
-});
-
-// Delete debt
-router.delete('/:id', async (req, res) => {
-  try {
-    const [existing] = await pool.query(
-      'SELECT id FROM debts WHERE id = ? AND user_id = ?',
-      [req.params.id, req.userId]
-    );
-
-    if (existing.length === 0) {
-      return res.status(404).json({ error: 'Debt not found' });
-    }
-
-    // Delete payments first
-    await pool.query('DELETE FROM debt_payments WHERE debt_id = ?', [req.params.id]);
-    await pool.query('DELETE FROM debts WHERE id = ?', [req.params.id]);
-    
-    res.json({ message: 'Debt deleted' });
+    res.json({ message: 'Debt deleted successfully' });
   } catch (error) {
     console.error('Delete debt error:', error);
     res.status(500).json({ error: 'Failed to delete debt' });

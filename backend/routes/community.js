@@ -27,7 +27,7 @@ router.get('/benchmarks', async (req, res) => {
         category,
         SUM(amount) as total
       FROM expenses
-      WHERE user_id = ? AND MONTH(date) = ? AND YEAR(date) = ?
+      WHERE user_id = ? AND EXTRACT(MONTH FROM date) = ? AND EXTRACT(YEAR FROM date) = ?
       GROUP BY category
     `, [req.userId, currentMonth, currentYear]);
 
@@ -76,12 +76,12 @@ router.get('/savings-comparison', async (req, res) => {
 
     const [income] = await pool.query(`
       SELECT COALESCE(SUM(amount), 0) as total
-      FROM income WHERE user_id = ? AND MONTH(date) = ? AND YEAR(date) = ?
+      FROM income WHERE user_id = ? AND EXTRACT(MONTH FROM date) = ? AND EXTRACT(YEAR FROM date) = ?
     `, [req.userId, currentMonth, currentYear]);
 
     const [expenses] = await pool.query(`
       SELECT COALESCE(SUM(amount), 0) as total
-      FROM expenses WHERE user_id = ? AND MONTH(date) = ? AND YEAR(date) = ?
+      FROM expenses WHERE user_id = ? AND EXTRACT(MONTH FROM date) = ? AND EXTRACT(YEAR FROM date) = ?
     `, [req.userId, currentMonth, currentYear]);
 
     const monthlyIncome = parseFloat(income[0].total);
@@ -268,8 +268,8 @@ router.get('/trends', async (req, res) => {
       SELECT category, month, year, avg_percentage
       FROM community_stats
       WHERE country = ? AND 
-        ((year = YEAR(CURDATE()) AND month <= MONTH(CURDATE())) 
-         OR (year = YEAR(CURDATE()) - 1 AND month > MONTH(CURDATE())))
+        ((year = EXTRACT(YEAR FROM CURRENT_DATE) AND month <= EXTRACT(MONTH FROM CURRENT_DATE)) 
+         OR (year = EXTRACT(YEAR FROM CURRENT_DATE) - 1 AND month > EXTRACT(MONTH FROM CURRENT_DATE)))
       ORDER BY year DESC, month DESC, avg_percentage DESC
       LIMIT 60
     `, [country]);

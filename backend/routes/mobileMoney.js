@@ -204,7 +204,8 @@ router.post('/parse', [
     const [result] = await pool.query(
       `INSERT INTO sms_transactions 
        (user_id, raw_message, transaction_type, amount, balance_after, recipient, sender, merchant, reference, provider, transaction_date, category)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       RETURNING id`,
       [
         req.userId,
         message,
@@ -221,7 +222,7 @@ router.post('/parse', [
       ]
     );
 
-    const smsId = result.insertId;
+    const smsId = result[0].id;
 
     // Auto-create expense if it's a payment or sent money
     if (parsed.amount > 0 && ['payment', 'sent', 'withdrawal'].includes(parsed.type)) {
@@ -230,7 +231,8 @@ router.post('/parse', [
       
       const [expenseResult] = await pool.query(
         `INSERT INTO expenses (user_id, amount, category, date, description, source, sms_id, merchant)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+         RETURNING id`,
         [
           req.userId,
           parsed.amount,
@@ -246,7 +248,7 @@ router.post('/parse', [
       // Link expense to SMS
       await pool.query(
         'UPDATE sms_transactions SET linked_expense_id = ?, is_processed = TRUE WHERE id = ?',
-        [expenseResult.insertId, smsId]
+        [expenseResult[0].id, smsId]
       );
     }
 
@@ -254,7 +256,8 @@ router.post('/parse', [
     if (parsed.amount > 0 && parsed.type === 'received') {
       const [incomeResult] = await pool.query(
         `INSERT INTO income (user_id, amount, source, date, notes)
-         VALUES (?, ?, ?, ?, ?)`,
+         VALUES (?, ?, ?, ?, ?)
+         RETURNING id`,
         [
           req.userId,
           parsed.amount,
@@ -266,7 +269,7 @@ router.post('/parse', [
 
       await pool.query(
         'UPDATE sms_transactions SET linked_income_id = ?, is_processed = TRUE WHERE id = ?',
-        [incomeResult.insertId, smsId]
+        [incomeResult[0].id, smsId]
       );
     }
 
@@ -471,8 +474,9 @@ router.post('/accounts', [
     await pool.query(
       `INSERT INTO mobile_money_accounts (user_id, provider, phone_number, account_name, is_primary)
        VALUES (?, ?, ?, ?, ?)
-       ON DUPLICATE KEY UPDATE account_name = ?, is_primary = ?`,
-      [req.userId, provider, phone_number, account_name || null, is_primary || false, account_name, is_primary]
+       ON CONFLICT (user_id, provider, phone_number) DO UPDATE SET 
+         account_name = EXCLUDED.account_name, is_primary = EXCLUDED.is_primary`,
+      [req.userId, provider, phone_number, account_name || null, is_primary || false]
     );
 
     const [accounts] = await pool.query(
@@ -497,7 +501,7 @@ router.get('/insights', async (req, res) => {
         SUM(CASE WHEN transaction_type IN ('payment', 'sent', 'withdrawal') THEN amount ELSE 0 END) as total_sent,
         SUM(CASE WHEN transaction_type = 'received' THEN amount ELSE 0 END) as total_received
       FROM sms_transactions
-      WHERE user_id = ? AND transaction_date >= DATE_SUB(CURDATE(), INTERVAL 30 DAY)
+      WHERE user_id = ? AND transaction_date >= CURRENT_DATE - INTERVAL '30 days'
     `, [req.userId]);
 
     const [byProvider] = await pool.query(`
@@ -506,21 +510,21 @@ router.get('/insights', async (req, res) => {
         SUM(CASE WHEN transaction_type IN ('payment', 'sent', 'withdrawal') THEN amount ELSE 0 END) as total_spent,
         SUM(CASE WHEN transaction_type = 'received' THEN amount ELSE 0 END) as total_received
       FROM sms_transactions
-      WHERE user_id = ? AND transaction_date >= DATE_SUB(CURDATE(), INTERVAL 30 DAY)
+      WHERE user_id = ? AND transaction_date >= CURRENT_DATE - INTERVAL '30 days'
       GROUP BY provider
     `, [req.userId]);
 
     const [byType] = await pool.query(`
       SELECT transaction_type, COUNT(*) as count, SUM(amount) as total
       FROM sms_transactions
-      WHERE user_id = ? AND transaction_date >= DATE_SUB(CURDATE(), INTERVAL 30 DAY)
+      WHERE user_id = ? AND transaction_date >= CURRENT_DATE - INTERVAL '30 days'
       GROUP BY transaction_type
     `, [req.userId]);
 
     const [topMerchants] = await pool.query(`
       SELECT merchant, COUNT(*) as visits, SUM(amount) as total_spent
       FROM sms_transactions
-      WHERE user_id = ? AND merchant IS NOT NULL AND merchant != '' AND transaction_date >= DATE_SUB(CURDATE(), INTERVAL 30 DAY)
+      WHERE user_id = ? AND merchant IS NOT NULL AND merchant != '' AND transaction_date >= CURRENT_DATE - INTERVAL '30 days'
       GROUP BY merchant
       ORDER BY total_spent DESC
       LIMIT 10
