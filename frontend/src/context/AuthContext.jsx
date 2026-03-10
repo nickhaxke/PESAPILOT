@@ -15,7 +15,7 @@ export function AuthProvider({ children }) {
     const token = localStorage.getItem('token')
     if (token) {
       try {
-        const response = await api.get('/auth/me')
+        const response = await api.get('/api/auth/me')
         setUser(response.data.user)
       } catch (error) {
         localStorage.removeItem('token')
@@ -26,7 +26,7 @@ export function AuthProvider({ children }) {
   }
 
   const login = async (email, password) => {
-    const response = await api.post('/auth/login', { email, password })
+    const response = await api.post('/api/auth/login', { email, password })
     const { token, user } = response.data
     localStorage.setItem('token', token)
     setUser(user)
@@ -34,7 +34,7 @@ export function AuthProvider({ children }) {
   }
 
   const register = async (name, email, password) => {
-    const response = await api.post('/auth/register', { name, email, password })
+    const response = await api.post('/api/auth/register', { name, email, password })
     const { token, user } = response.data
     localStorage.setItem('token', token)
     setUser(user)
@@ -47,12 +47,12 @@ export function AuthProvider({ children }) {
   }
 
   const updateProfile = async (name) => {
-    await api.put('/auth/profile', { name })
+    await api.put('/api/auth/profile', { name })
     setUser(prev => ({ ...prev, name }))
   }
 
   const changePassword = async (currentPassword, newPassword) => {
-    await api.put('/auth/password', { currentPassword, newPassword })
+    await api.put('/api/auth/password', { currentPassword, newPassword })
   }
 
   return (
