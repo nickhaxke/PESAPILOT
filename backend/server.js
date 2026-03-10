@@ -70,7 +70,7 @@ app.get('/api/env-check', (req, res) => {
 });
 
 app.use(cors({
-  origin: 'https://your-netlify-app.netlify.app', // BADILISHA na Netlify domain yako kamili
+  origin: 'https://pesapilot.netlify.app',
   credentials: true
 }));
 
