@@ -69,18 +69,10 @@ app.get('/api/env-check', (req, res) => {
   });
 });
 
-// Serve static files in production
-if (process.env.NODE_ENV === 'production') {
-  // Serve frontend build files
-  app.use(express.static(path.join(__dirname, '../frontend/dist')));
-  
-  // Handle React routing - send all non-API requests to index.html
-  app.get('*', (req, res) => {
-    if (!req.path.startsWith('/api')) {
-      res.sendFile(path.join(__dirname, '../frontend/dist/index.html'));
-    }
-  });
-}
+app.use(cors({
+  origin: 'https://your-netlify-app.netlify.app', // BADILISHA na Netlify domain yako kamili
+  credentials: true
+}));
 
 // Error handler
 app.use((err, req, res, next) => {
